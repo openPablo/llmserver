@@ -4,5 +4,6 @@ project(llmserver C)
 set(CMAKE_C_STANDARD 23)
 
 add_executable(llmserver main.c
+        main.c
 
 )
