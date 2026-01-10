@@ -3,16 +3,28 @@
 #include <sys/un.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
 
 constexpr char HOSTNAME[] = "0.0.0.0";
 constexpr char PORT[] = "8080";
-
-int main(void) {
-    struct addrinfo * addresses, * adress;
-    struct addrinfo hints = {0};
-    int lfd, cfd;
+void handleRequest(int cfd) {
     char buf[1024];
     ssize_t numRead;
+    while ((numRead = read(cfd, buf, sizeof(buf))) > 0 ) {
+        write(STDOUT_FILENO, buf, numRead);
+        write(cfd, buf, numRead);
+    }
+    close(cfd);
+}
+
+void reapChildren(int sig) {
+    while (waitpid(sig, NULL, WNOHANG) > 0);
+}
+int createConnection(const char hostname[], const char port[]) {
+    struct addrinfo * addresses, * adress;
+    struct addrinfo hints = {0};
+    int lfd;
 
     hints.ai_canonname = NULL;
     hints.ai_addr = NULL;
@@ -21,7 +33,7 @@ int main(void) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV;
 
-    int err = getaddrinfo(HOSTNAME, PORT,&hints, &addresses);
+    int err = getaddrinfo(hostname, port,&hints, &addresses);
     if (err != 0) {
         printf("getaddrinfo error: %s\n", gai_strerror(err));
     }
@@ -41,14 +53,23 @@ int main(void) {
         perror("listen");
     }
     freeaddrinfo(addresses);
+    return lfd;
+}
+int main(void) {
+    int cfd;
+    int lfd = createConnection(HOSTNAME, PORT);
+    signal(SIGCHLD, reapChildren);
     while (1) {
         if ((cfd = accept(lfd,NULL,NULL)) == -1) {
             perror("accept");
         }
-        while ((numRead = read(cfd, buf, sizeof(buf))) > 0 ) {
-            write(STDOUT_FILENO, buf, numRead);
-            write(cfd, buf, numRead);
+        switch (fork()) {
+            case -1:
+                perror("fork");
+            case 0:
+                handleRequest(cfd);
+            default:
+                close(cfd);
         }
-        close(cfd);
     }
 }
