@@ -1,27 +1,23 @@
 #include <netdb.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <poll.h>
 
-int main(int argc, char *argv[]) {
+
+int createConnection(char hostname[], char port[]) {
+    int cfd;
     struct addrinfo hints = {0};
     struct addrinfo * addresses, * adress;
-    int cfd;
-    ssize_t numread;
-    char buf[1024];
-    if (argc != 3) {
-        printf("usage: %s <hostname> <port>\n", argv[0]);
-    }
-
     hints.ai_canonname = NULL;
     hints.ai_addr = NULL;
     hints.ai_next = NULL;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_family = AF_UNSPEC;
     hints.ai_flags = AI_NUMERICSERV;
-
-    int err = getaddrinfo(argv[1], argv[2], &hints, &addresses);
+    int err = getaddrinfo(hostname, port, &hints, &addresses);
     if (err != 0) {
         printf("getaddrinfo error: %s\n", gai_strerror(err));
     }
@@ -35,16 +31,40 @@ int main(int argc, char *argv[]) {
         close(cfd);
     }
     freeaddrinfo(addresses);
-    while ((numread = read(STDIN_FILENO, buf, sizeof(buf))) > 0) {
-        if (write(cfd, buf, numread) != numread) {
-            perror("write");
+    return cfd;
+}
+void talk_through_pty(int cfd) {
+    char buf[1024];
+    ssize_t numRead;
+    struct pollfd fds[2] = {
+        {STDIN_FILENO, POLLIN, 0},
+        {cfd, POLLIN, 0}
+    };
+
+    while (poll(fds, 2, -1) > 0) {
+        if (fds[0].revents & POLLIN) {
+            numRead = read(STDIN_FILENO, buf, sizeof(buf));
+            if (numRead <= 0) break;
+            write(cfd, buf, numRead);
+        }
+        if (fds[1].revents & POLLIN) {
+            numRead = read(cfd, buf, sizeof(buf));
+            if (numRead <= 0) break;
+            write(STDOUT_FILENO, buf, numRead);
         }
     }
-    if ((numread = read(cfd, buf, sizeof(buf))) > 0) {
-        if (write(STDOUT_FILENO, buf, numread) != numread) {
-            perror("write");
-        }
+}
+
+
+int main(int argc, char *argv[]) {
+
+    if (argc != 3) {
+        printf("usage: %s <hostname> <port>\n", argv[0]);
     }
+
+    int cfd = createConnection(argv[1], argv[2]);
+    talk_through_pty(cfd);
+
     if (close(cfd) == -1) {
         perror("close");
     }

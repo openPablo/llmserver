@@ -5,21 +5,59 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <pty.h>
+#include <poll.h>
 
 constexpr char HOSTNAME[] = "0.0.0.0";
 constexpr char PORT[] = "8080";
-void handleRequest(int cfd) {
+
+void talk_socket_pty(int masterFd, int cfd) {
     char buf[1024];
     ssize_t numRead;
-    while ((numRead = read(cfd, buf, sizeof(buf))) > 0 ) {
-        write(STDOUT_FILENO, buf, numRead);
-        write(cfd, buf, numRead);
+    struct pollfd pfds[2] = {
+        {masterFd, POLLIN, 0},
+        {cfd, POLLIN, 0}
+    };
+        while (poll(pfds, 2,30000) > 0) {
+            if (pfds[1].revents & POLLIN) {
+                if ((numRead  = read(cfd, buf, sizeof(buf)))  > 0) {
+                    if (numRead < 0) {
+                        break;
+                    }
+                    printf("%s", buf);
+                    write(masterFd, buf, numRead);
+                }
+            }
+            if (pfds[0].revents & POLLIN) {
+                if ((numRead = read(masterFd, buf, sizeof(buf))) > 0) {
+                    if (numRead < 0) {
+                        break;
+                    }
+                    write(cfd, buf, numRead);
+                }
+            }
+        }
+}
+
+void handleRequest(int cfd) {
+    char name[64];
+    int masterFd;
+    char* argv[] = {"/bin/bash",NULL};
+    pid_t pid= forkpty(&masterFd, name, NULL, NULL);
+    switch (pid) {
+        case -1:
+            perror("forkpty");
+        case 0:
+            execve("/bin/bash",argv,NULL);
+        default:
+            talk_socket_pty(masterFd,cfd);
+            break;
     }
     close(cfd);
 }
 
 void reapChildren(int sig) {
-    while (waitpid(sig, NULL, WNOHANG) > 0);
+    while (waitpid(-1, NULL, WNOHANG) > 0);
 }
 int createConnection(const char hostname[], const char port[]) {
     struct addrinfo * addresses, * adress;
@@ -68,8 +106,10 @@ int main(void) {
                 perror("fork");
             case 0:
                 handleRequest(cfd);
+                return 0;
             default:
                 close(cfd);
+                break;
         }
     }
 }
